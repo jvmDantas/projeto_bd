@@ -107,7 +107,7 @@ with tabs[0]:
 # TAB 2: ATENDIMENTOS (CRUD 1, 2, 3, 6)
 # ---------------------------------------------------------------------------
 with tabs[1]:
-    st.subheader("1️⃣ Inserir novo atendimento (com validação de FK)")
+    st.subheader("Inserir novo atendimento")
     st.caption("A inserção só ocorre se paciente, residente e preceptor existirem no banco.")
 
     try:
@@ -164,7 +164,7 @@ with tabs[1]:
         st.error(f"Erro ao carregar listas: {e}")
 
     st.divider()
-    st.subheader("2️⃣ Listar atendimentos de um paciente (ordenados por data)")
+    st.subheader("Listar atendimentos de um paciente (ordenados por data)")
     try:
         if len(pacientes):
             id_pac_consulta = st.selectbox(
@@ -189,7 +189,7 @@ with tabs[1]:
         st.error(f"Erro: {e}")
 
     st.divider()
-    st.subheader("3️⃣ Listar procedimentos realizados em um atendimento")
+    st.subheader("Listar procedimentos realizados em um atendimento")
     try:
         atendimentos = run_query("SELECT id_atendimento FROM atendimento ORDER BY id_atendimento;")
         id_atd = st.selectbox("Selecione o atendimento", atendimentos["id_atendimento"], key="proc_atd")
@@ -206,7 +206,7 @@ with tabs[1]:
         st.error(f"Erro: {e}")
 
     st.divider()
-    st.subheader("6️⃣ Tempo médio de duração dos atendimentos por residente")
+    st.subheader("Tempo médio de duração dos atendimentos por residente")
     try:
         sql = """
             SELECT pes.nome AS residente, COUNT(a.id_atendimento) AS total_atendimentos,
@@ -230,7 +230,7 @@ with tabs[1]:
 # TAB 3: PACIENTES (CRUD 4)
 # ---------------------------------------------------------------------------
 with tabs[2]:
-    st.subheader("4️⃣ Atualizar dados de um paciente (endereço ou convênio)")
+    st.subheader("Atualizar dados de um paciente (endereço ou convênio)")
     try:
         pacientes2 = run_query("""
             SELECT pac.id_pessoa, pes.nome, pac.endereco, pac.num_convenio
@@ -259,7 +259,7 @@ with tabs[2]:
 # TAB 4: PROCEDIMENTOS REALIZADOS (CRUD 5)
 # ---------------------------------------------------------------------------
 with tabs[3]:
-    st.subheader("5️⃣ Remover procedimento realizado (apenas se não faturado)")
+    st.subheader("Remover procedimento realizado (apenas se não faturado)")
     try:
         realizados = run_query("""
             SELECT pr.id_atendimento, pr.codigo_procedimento, proc.nome, pr.flag_faturado
@@ -295,7 +295,7 @@ with tabs[3]:
 # TAB 5: CONSULTAS ANALÍTICAS
 # ---------------------------------------------------------------------------
 with tabs[4]:
-    st.subheader("📌 Ranking dos residentes por número de atendimentos")
+    st.subheader("Ranking dos residentes por número de atendimentos")
     try:
         sql = """
             SELECT pes.nome AS residente, COUNT(a.id_atendimento) AS total_atendimentos,
@@ -314,7 +314,7 @@ with tabs[4]:
         st.error(f"Erro: {e}")
 
     st.divider()
-    st.subheader("📌 Preceptores com mais de 5 atendimentos em um mês")
+    st.subheader("Preceptores com mais de 5 atendimentos em um mês")
     try:
         col1, col2 = st.columns(2)
         mes = col1.number_input("Mês", min_value=1, max_value=12, value=1)
@@ -339,7 +339,7 @@ with tabs[4]:
         st.error(f"Erro: {e}")
 
     st.divider()
-    st.subheader("📌 Plantões escalados por residente, por unidade")
+    st.subheader("Plantões escalados por residente, por unidade")
     try:
         sql = """
             SELECT u.nome AS unidade, pes.nome AS residente, COUNT(ep.id_escala) AS total_plantoes
@@ -356,7 +356,7 @@ with tabs[4]:
         st.error(f"Erro: {e}")
 
     st.divider()
-    st.subheader("📌 Pacientes que nunca realizaram procedimento de risco ALTO")
+    st.subheader("Pacientes que nunca realizaram procedimento de risco ALTO")
     try:
         sql = """
             SELECT pes.nome AS paciente, pes.cpf
