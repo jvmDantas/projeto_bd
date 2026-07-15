@@ -1,11 +1,4 @@
 -- ============================================================================
--- SISTEMA DE GESTÃO HOSPITALAR - Dra. Yuska Maritan Brito
--- Etapa 1: Implementação do BD + CRUD + Consultas Analíticas
--- SGBD: PostgreSQL
--- ============================================================================
-
-
--- ============================================================================
 -- PARTE 1: CREATE TABLE (todas as constraints: PK, FK, CHECK, NOT NULL, UNIQUE)
 -- ============================================================================
 
@@ -333,7 +326,7 @@ ORDER BY tempo_medio_minutos DESC;
 
 
 -- ============================================================================
--- PARTE 4: CONSULTAS ANALÍTICAS (SQL puro)
+-- PARTE 4: CONSULTAS ANALÍTICAS
 -- ============================================================================
 
 -- 4.1 Ranking dos residentes por número de atendimentos realizados
