@@ -67,6 +67,28 @@ pip install -r requirements.txt
 | `psycopg2-binary >= 2.9` | Conexão com PostgreSQL |
 | `pandas >= 2.0`          | Manipulação de dados   |
 
+### 2.1 Configuração externa do banco
+
+Você pode criar um arquivo `.env` na raiz do projeto para evitar digitar as credenciais manualmente toda vez que abrir o app.
+
+Exemplo:
+
+```env
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=hospital_gestor
+DB_USER=postgres
+DB_PASSWORD=sua_senha
+```
+
+Se preferir, também é possível usar uma única variável `DATABASE_URL` no formato:
+
+```env
+DATABASE_URL=postgresql://postgres:sua_senha@localhost:5432/hospital_gestor
+```
+
+O Streamlit vai usar esses valores como padrão na barra lateral e você ainda poderá alterá-los manualmente, se necessário.
+
 ---
 
 ## 3. Executar a Aplicação

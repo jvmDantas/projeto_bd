@@ -7,6 +7,10 @@ Como executar:
     streamlit run app.py
 """
 
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+
 import streamlit as st
 import pandas as pd
 import psycopg2
@@ -17,6 +21,55 @@ st.set_page_config(page_title="Gestão Hospitalar", page_icon="🏥", layout="wi
 # ---------------------------------------------------------------------------
 # CONEXÃO COM O BANCO
 # ---------------------------------------------------------------------------
+def load_env_file(env_path):
+    if not env_path.exists():
+        return {}
+
+    values = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+
+    return values
+
+
+def load_db_config():
+    env_path = Path(__file__).with_name(".env")
+    file_values = load_env_file(env_path)
+
+    def get_setting(name, default):
+        return os.getenv(name, file_values.get(name, default))
+
+    database_url = get_setting("DATABASE_URL", "")
+    if database_url:
+        parsed = urlparse(database_url)
+        return {
+            "db_host": parsed.hostname or "localhost",
+            "db_port": str(parsed.port or 5432),
+            "db_name": parsed.path.lstrip("/") or "postgres",
+            "db_user": parsed.username or "postgres",
+            "db_pass": parsed.password or "",
+        }
+
+    return {
+        "db_host": get_setting("DB_HOST", "localhost"),
+        "db_port": get_setting("DB_PORT", "5432"),
+        "db_name": get_setting("DB_NAME", "hospital_gestor"),
+        "db_user": get_setting("DB_USER", "postgres"),
+        "db_pass": get_setting("DB_PASSWORD", ""),
+    }
+
+
+db_config = load_db_config()
+
+
 def get_connection():
     return psycopg2.connect(
         host=st.session_state.db_host,
@@ -32,6 +85,8 @@ def run_query(sql, params=None):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
+            if cur.description is None:
+                return pd.DataFrame()
             cols = [c.name for c in cur.description]
             rows = cur.fetchall()
     return pd.DataFrame(rows, columns=cols)
@@ -51,11 +106,11 @@ def run_command(sql, params=None):
 # SIDEBAR: CONFIGURAÇÃO DE CONEXÃO
 # ---------------------------------------------------------------------------
 st.sidebar.title("🔌 Conexão com o Banco")
-st.session_state.db_host = st.sidebar.text_input("Host", "localhost")
-st.session_state.db_port = st.sidebar.text_input("Porta", "5432")
-st.session_state.db_name = st.sidebar.text_input("Banco", "postgres")
-st.session_state.db_user = st.sidebar.text_input("Usuário", "postgres")
-st.session_state.db_pass = st.sidebar.text_input("Senha", "*Edwiges1234", type="password")
+st.session_state.db_host = st.sidebar.text_input("Host", db_config["db_host"])
+st.session_state.db_port = st.sidebar.text_input("Porta", db_config["db_port"])
+st.session_state.db_name = st.sidebar.text_input("Banco", db_config["db_name"])
+st.session_state.db_user = st.sidebar.text_input("Usuário", db_config["db_user"])
+st.session_state.db_pass = st.sidebar.text_input("Senha", db_config["db_pass"], type="password")
 
 if st.sidebar.button("Testar conexão"):
     try:
