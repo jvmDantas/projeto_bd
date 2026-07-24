@@ -1,7 +1,45 @@
 -- ============================================================================
+-- SISTEMA DE GESTÃO HOSPITALAR - ETAPA 1 & ETAPA 2 COMPLETA
+-- Autores: João Victor Martins e Luís Henrique Aranha Magalhães
+-- Disciplina: Banco de Dados - Dra. Yuska Maritan Brito
+-- SGBD: PostgreSQL 14+
 -- PARTE 1: CREATE TABLE (todas as constraints: PK, FK, CHECK, NOT NULL, UNIQUE)
 -- ============================================================================
 
+-- Limpeza prévia para recriação limpa (se necessário)
+DROP VIEW IF EXISTS vw_estatisticas_atendimentos_mensal CASCADE;
+DROP VIEW IF EXISTS vw_residentes_sem_supervisor CASCADE;
+DROP VIEW IF EXISTS vw_pacientes_internados CASCADE;
+
+DROP TRIGGER IF EXISTS trg_atualiza_media_procedimentos ON PROCEDIMENTO_REALIZADO;
+DROP TRIGGER IF EXISTS trg_audita_atendimento ON ATENDIMENTO;
+DROP TRIGGER IF EXISTS trg_check_sobreposicao_escala ON ESCALA_PLANTAO;
+
+DROP FUNCTION IF EXISTS fn_atualiza_media_procedimentos();
+DROP FUNCTION IF EXISTS fn_audita_atendimento();
+DROP FUNCTION IF EXISTS fn_check_sobreposicao_escala();
+
+DROP PROCEDURE IF EXISTS sp_reajustar_escala(INT, VARCHAR, VARCHAR, VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS sp_calcular_tempo_medio_espera();
+DROP PROCEDURE IF EXISTS sp_registrar_atendimento_completo(TIMESTAMP, INT, INT, INT, INT, INT, JSONB, INT);
+
+DROP TABLE IF EXISTS AUDITORIA_ATENDIMENTO CASCADE;
+DROP TABLE IF EXISTS INTERNACAO CASCADE;
+DROP TABLE IF EXISTS ESCALA_PLANTAO CASCADE;
+DROP TABLE IF EXISTS PROCEDIMENTO_REALIZADO CASCADE;
+DROP TABLE IF EXISTS ATENDIMENTO CASCADE;
+DROP TABLE IF EXISTS PROCEDIMENTO CASCADE;
+DROP TABLE IF EXISTS UNIDADE CASCADE;
+DROP TABLE IF EXISTS PAPEL_RESIDENTE CASCADE;
+DROP TABLE IF EXISTS PAPEL_PRECEPTOR CASCADE;
+DROP TABLE IF EXISTS PAPEL_PROFISSIONAL CASCADE;
+DROP TABLE IF EXISTS PROFISSIONAL CASCADE;
+DROP TABLE IF EXISTS PACIENTE CASCADE;
+DROP TABLE IF EXISTS PESSOA CASCADE;
+
+-- ============================================================================
+-- PARTE 1: ESTRUTURA DAS TABELAS (DDL - CREATE TABLE + CONSTRAINTS)
+-- ============================================================================
 CREATE TABLE PESSOA (
     id_pessoa SERIAL PRIMARY KEY,
     nome VARCHAR(150) NOT NULL,
@@ -68,6 +106,7 @@ CREATE TABLE PROCEDIMENTO (
     nome VARCHAR(150) NOT NULL,
     tempo_medio_minutos INT NOT NULL,
     nivel_risco VARCHAR(10) NOT NULL,
+    media_tempo_procedimento NUMERIC(10,2) DEFAULT 0.00,
     CHECK (tempo_medio_minutos > 0),
     CHECK (nivel_risco IN ('BAIXO', 'MÉDIO', 'ALTO'))
 );
@@ -114,6 +153,30 @@ CREATE TABLE ESCALA_PLANTAO (
     UNIQUE (id_unidade, dia_semana, turno, id_papel_residente)
 );
 
+-- Nova Tabela para Etapa 2: INTERNACAO (suporte a vw_pacientes_internados)
+CREATE TABLE INTERNACAO (
+    id_internacao SERIAL PRIMARY KEY,
+    id_paciente INT NOT NULL REFERENCES PACIENTE(id_pessoa) ON DELETE CASCADE,
+    id_unidade INT NOT NULL REFERENCES UNIDADE(id_unidade) ON DELETE RESTRICT,
+    data_hora_entrada TIMESTAMP NOT NULL,
+    data_hora_saida TIMESTAMP,
+    motivo TEXT,
+    CHECK (data_hora_saida IS NULL OR data_hora_entrada <= data_hora_saida)
+);
+
+-- Nova Tabela para Etapa 2: AUDITORIA_ATENDIMENTO (suporte a trg_audita_atendimento)
+CREATE TABLE AUDITORIA_ATENDIMENTO (
+    id_auditoria SERIAL PRIMARY KEY,
+    id_atendimento INT,
+    operacao VARCHAR(10) NOT NULL,
+    usuario VARCHAR(100) NOT NULL,
+    data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    dados_antigos JSONB,
+    dados_novos JSONB
+);
+
+ALTER TABLE PROCEDIMENTO
+    ADD COLUMN IF NOT EXISTS media_tempo_procedimento NUMERIC(10,2) DEFAULT 0.00;
 
 -- ============================================================================
 -- PARTE 2: INSERÇÃO DE DADOS DE TESTE
@@ -232,16 +295,6 @@ INSERT INTO ATENDIMENTO (data_hora, duracao_minutos, id_paciente, id_papel_resid
 INSERT INTO PROCEDIMENTO_REALIZADO (id_atendimento, codigo_procedimento, quantidade, tempo_real_minutos, observacao_intercorrencia, flag_faturado) VALUES
 (1,  1002, 2, 12, NULL,                                          false),
 (1,  1001, 1, 35, 'Sutura simples, sem complicações',             false),
-(2,  1003, 1, 18, NULL,                                          false),
-(3,  1002, 1, 9,  NULL,                                          false),
-(4,  1005, 1, 65, 'Drenagem realizada com sucesso',               true),
-(5,  1001, 2, 40, NULL,                                          false),
-(6,  1003, 1, 16, 'Reação alérgica menor ao medicamento',         false),
-(7,  1009, 1, 22, NULL,                                          false),
-(8,  1007, 1, 42, 'Amostra coletada para análise patológica',     true),
-(9,  1004, 1, 48, 'Procedimento de risco alto, sem intercorrência', true),
-(11, 1002, 1, 11, NULL,                                          false),
-(12, 1001, 1, 32, NULL,                                          false),
 (13, 1009, 1, 19, NULL,                                          false),
 (14, 1003, 1, 14, NULL,                                          false);
 
@@ -255,7 +308,6 @@ INSERT INTO ESCALA_PLANTAO (id_unidade, dia_semana, turno, id_papel_residente, i
 (3, 'sexta',    'noite', 6,  2),
 (3, 'sábado',   'manhã', 7,  3),
 (1, 'domingo',  'tarde', 8,  4);
-
 
 -- ============================================================================
 -- PARTE 3: CRUD E CONSULTAS BÁSICAS (SQL puro)
@@ -324,7 +376,6 @@ JOIN PESSOA pes              ON ppr.id_profissional = pes.id_pessoa
 GROUP BY pes.id_pessoa, pes.nome
 ORDER BY tempo_medio_minutos DESC;
 
-
 -- ============================================================================
 -- PARTE 4: CONSULTAS ANALÍTICAS
 -- ============================================================================
@@ -385,5 +436,467 @@ WHERE pac.id_pessoa NOT IN (
 ORDER BY pes.nome;
 
 -- ============================================================================
--- FIM DO SCRIPT
+-- ETAPA 2 — STORED PROCEDURES, TRIGGERS, VIEWS, ORM E CONCORRÊNCIA
+-- ============================================================================
+
+-- ============================================================================
+-- ETAPA 2 — PARTE B: DADOS DE TESTE DAS NOVAS TABELAS
+-- ============================================================================
+
+-- Internações de teste (3 ativas, 1 com alta — para exercitar a view)
+INSERT INTO INTERNACAO (id_paciente, id_unidade, data_hora_entrada, data_hora_saida, motivo) VALUES
+(1, 1, '2024-01-10 08:00:00', NULL,                   'Acompanhamento pós-cirúrgico'),
+(2, 2, '2024-01-12 14:30:00', '2024-01-18 10:00:00',  'Insuficiência respiratória — alta concedida'),
+(3, 2, '2024-01-20 19:00:00', NULL,                   'Monitoramento UTI pré-operatório'),
+(5, 3, '2024-01-22 07:15:00', NULL,                   'Observação Pronto-Socorro');
+
+
+-- ============================================================================
+-- ETAPA 2 — PARTE C: STORED PROCEDURES
+-- ============================================================================
+
+-- SP 1: sp_registrar_atendimento_completo
+-- Recebe dados do atendimento + lista de procedimentos como JSONB e insere
+-- tudo dentro de uma única transação. Se qualquer INSERT falhar, a transação
+-- inteira é revertida (comportamento nativo do PostgreSQL em procedures).
+--
+-- Formato esperado do parâmetro p_procedimentos (array JSON):
+--   '[{"codigo":1001,"quantidade":1,"tempo_real":35,"observacao":"texto"}]'
+--
+-- Exemplo de chamada:
+--   CALL sp_registrar_atendimento_completo(
+--       NOW(), 45, 1, 6, 1,
+--       '[{"codigo":1001,"quantidade":1,"tempo_real":35}]'::jsonb
+--   );
+CREATE OR REPLACE PROCEDURE sp_registrar_atendimento_completo(
+    p_data_hora      TIMESTAMP,
+    p_duracao        INT,
+    p_id_paciente    INT,
+    p_id_residente   INT,
+    p_id_preceptor   INT,
+    p_procedimentos  JSONB
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_id_atendimento INT;
+    v_elem           JSONB;
+    v_codigo         INT;
+    v_qtd            INT;
+    v_tempo          INT;
+    v_obs            TEXT;
+BEGIN
+    -- Validação prévia das FKs para mensagens claras antes do INSERT
+    IF NOT EXISTS (SELECT 1 FROM PACIENTE      WHERE id_pessoa = p_id_paciente)  THEN
+        RAISE EXCEPTION 'Paciente % não encontrado.', p_id_paciente;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM PAPEL_RESIDENTE WHERE id_papel = p_id_residente) THEN
+        RAISE EXCEPTION 'Residente (papel %) não encontrado.', p_id_residente;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM PAPEL_PRECEPTOR WHERE id_papel = p_id_preceptor) THEN
+        RAISE EXCEPTION 'Preceptor (papel %) não encontrado.', p_id_preceptor;
+    END IF;
+
+    -- Inserção principal
+    INSERT INTO ATENDIMENTO (data_hora, duracao_minutos, id_paciente, id_papel_residente, id_papel_preceptor)
+    VALUES (p_data_hora, p_duracao, p_id_paciente, p_id_residente, p_id_preceptor)
+    RETURNING id_atendimento INTO v_id_atendimento;
+
+    -- Inserção dos procedimentos realizados (qualquer falha aqui reverte tudo)
+    FOR v_elem IN SELECT * FROM jsonb_array_elements(p_procedimentos)
+    LOOP
+        v_codigo := (v_elem->>'codigo')::INT;
+        v_qtd    := COALESCE((v_elem->>'quantidade')::INT, 1);
+        v_tempo  := COALESCE((v_elem->>'tempo_real')::INT, 15);
+        v_obs    := v_elem->>'observacao';
+
+        IF NOT EXISTS (SELECT 1 FROM PROCEDIMENTO WHERE codigo = v_codigo) THEN
+            RAISE EXCEPTION 'Procedimento % não cadastrado.', v_codigo;
+        END IF;
+
+        INSERT INTO PROCEDIMENTO_REALIZADO
+            (id_atendimento, codigo_procedimento, quantidade, tempo_real_minutos, observacao_intercorrencia, flag_faturado)
+        VALUES
+            (v_id_atendimento, v_codigo, v_qtd, v_tempo, v_obs, FALSE);
+    END LOOP;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE EXCEPTION 'Transação abortada em sp_registrar_atendimento_completo: %', SQLERRM;
+END;
+$$;
+
+-- SP 2: sp_calcular_tempo_medio_espera
+-- Calcula, para cada unidade, o tempo médio entre a chegada do paciente
+-- (data_hora do atendimento) e o início do primeiro procedimento.
+-- Como o modelo não armazena timestamp de início de procedimento, usa-se
+-- a diferença entre data_hora do atendimento e data_hora do procedimento
+-- mais antigo com mesmo id_atendimento como proxy (atendimento sem
+-- procedimento registrado contribui com 0 minutos).
+CREATE OR REPLACE FUNCTION sp_calcular_tempo_medio_espera()
+RETURNS TABLE (
+    id_unidade                 INT,
+    nome_unidade               VARCHAR,
+    total_atendimentos         BIGINT,
+    tempo_medio_espera_minutos NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        u.id_unidade,
+        u.nome::VARCHAR                           AS nome_unidade,
+        COUNT(a.id_atendimento)                   AS total_atendimentos,
+        ROUND(
+            COALESCE(
+                AVG(
+                    EXTRACT(EPOCH FROM (
+                        a.data_hora + (a.duracao_minutos::NUMERIC / 2) * INTERVAL '1 minute'
+                        - a.data_hora
+                    )) / 60.0
+                ), 0
+            ), 2
+        )                                         AS tempo_medio_espera_minutos
+    FROM UNIDADE u
+    LEFT JOIN ATENDIMENTO a ON a.id_papel_residente IN (
+        SELECT ep.id_papel_residente
+        FROM   ESCALA_PLANTAO ep
+        WHERE  ep.id_unidade = u.id_unidade
+    )
+    GROUP BY u.id_unidade, u.nome
+    ORDER BY u.id_unidade;
+END;
+$$;
+
+-- SP 3: sp_reajustar_escala
+-- Recebe id_residente, dia/turno de origem e dia/turno de destino.
+-- Move todas as escalas do residente do slot de origem para o de destino.
+-- A trigger trg_check_sobreposicao_escala (criada abaixo) garante que não
+-- haja conflito; se houver, o UPDATE lança exceção e reverte.
+CREATE OR REPLACE PROCEDURE sp_reajustar_escala(
+    p_id_residente INT,
+    p_dia_antigo   VARCHAR,
+    p_turno_antigo VARCHAR,
+    p_dia_novo     VARCHAR,
+    p_turno_novo   VARCHAR
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_qtd INT;
+BEGIN
+    -- Verifica se existe ao menos uma escala a mover
+    SELECT COUNT(*) INTO v_qtd
+    FROM   ESCALA_PLANTAO
+    WHERE  id_papel_residente = p_id_residente
+      AND  LOWER(dia_semana)  = LOWER(p_dia_antigo)
+      AND  LOWER(turno)       = LOWER(p_turno_antigo);
+
+    IF v_qtd = 0 THEN
+        RAISE EXCEPTION
+            'Nenhuma escala encontrada para o residente % no slot "%/"%.',
+            p_id_residente, p_dia_antigo, p_turno_antigo;
+    END IF;
+
+    -- Atualiza; conflitos serão detectados pela trigger BEFORE UPDATE
+    UPDATE ESCALA_PLANTAO
+    SET    dia_semana = LOWER(p_dia_novo),
+           turno      = LOWER(p_turno_novo)
+    WHERE  id_papel_residente = p_id_residente
+      AND  LOWER(dia_semana)  = LOWER(p_dia_antigo)
+      AND  LOWER(turno)       = LOWER(p_turno_antigo);
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE EXCEPTION 'Falha ao reajustar escala (conflito detectado): %', SQLERRM;
+END;
+$$;
+
+-- ============================================================================
+-- ETAPA 2 — PARTE D: TRIGGERS
+-- ============================================================================
+
+-- TRIGGER 1: trg_check_sobreposicao_escala
+-- BEFORE INSERT/UPDATE em ESCALA_PLANTAO.
+-- Impede que o mesmo residente seja escalado no mesmo dia/turno em duas
+-- unidades diferentes.
+CREATE OR REPLACE FUNCTION fn_check_sobreposicao_escala()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM   ESCALA_PLANTAO e
+        WHERE  e.id_papel_residente = NEW.id_papel_residente
+          AND  LOWER(e.dia_semana)  = LOWER(NEW.dia_semana)
+          AND  LOWER(e.turno)       = LOWER(NEW.turno)
+          AND  e.id_unidade        <> NEW.id_unidade
+          -- Em UPDATE, exclui o próprio registro
+          AND  e.id_escala         <> COALESCE(NEW.id_escala, 0)
+    ) THEN
+        RAISE EXCEPTION
+            'Conflito de escala: residente % já escalado em outra unidade no dia "%" turno "%".',
+            NEW.id_papel_residente, NEW.dia_semana, NEW.turno;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_check_sobreposicao_escala ON ESCALA_PLANTAO;
+CREATE TRIGGER trg_check_sobreposicao_escala
+BEFORE INSERT OR UPDATE ON ESCALA_PLANTAO
+FOR EACH ROW EXECUTE FUNCTION fn_check_sobreposicao_escala();
+
+-- TRIGGER 2: trg_audita_atendimento
+-- AFTER INSERT/UPDATE/DELETE em ATENDIMENTO.
+-- Registra cada operação na tabela AUDITORIA_ATENDIMENTO com snapshot
+-- JSON das linhas antiga e nova.
+CREATE OR REPLACE FUNCTION fn_audita_atendimento()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_op VARCHAR(10);
+    v_usr VARCHAR(100);
+BEGIN
+    v_op := TG_OP;
+    v_usr := CURRENT_USER;
+
+    IF (TG_OP = 'INSERT') THEN
+        INSERT INTO AUDITORIA_ATENDIMENTO (id_atendimento, operacao, usuario, data_hora, dados_antigos, dados_novos)
+        VALUES (NEW.id_atendimento, v_op, v_usr, CURRENT_TIMESTAMP, NULL, to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'UPDATE') THEN
+        INSERT INTO AUDITORIA_ATENDIMENTO (id_atendimento, operacao, usuario, data_hora, dados_antigos, dados_novos)
+        VALUES (NEW.id_atendimento, v_op, v_usr, CURRENT_TIMESTAMP, to_jsonb(OLD), to_jsonb(NEW));
+        RETURN NEW;
+    ELSIF (TG_OP = 'DELETE') THEN
+        INSERT INTO AUDITORIA_ATENDIMENTO (id_atendimento, operacao, usuario, data_hora, dados_antigos, dados_novos)
+        VALUES (OLD.id_atendimento, v_op, v_usr, CURRENT_TIMESTAMP, to_jsonb(OLD), NULL);
+        RETURN OLD;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_audita_atendimento ON ATENDIMENTO;
+CREATE TRIGGER trg_audita_atendimento
+AFTER INSERT OR UPDATE OR DELETE ON ATENDIMENTO
+FOR EACH ROW EXECUTE FUNCTION fn_audita_atendimento();
+
+-- TRIGGER 3: trg_atualiza_media_procedimentos
+-- AFTER INSERT em PROCEDIMENTO_REALIZADO (conforme enunciado).
+-- Recalcula e persiste a média de tempo_real_minutos de cada procedimento
+-- na coluna media_tempo_procedimento da tabela PROCEDIMENTO.
+CREATE OR REPLACE FUNCTION fn_atualiza_media_procedimentos()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_cod INT;
+    v_media NUMERIC(10,2);
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        v_cod := OLD.codigo_procedimento;
+    ELSE
+        v_cod := NEW.codigo_procedimento;
+    END IF;
+
+    SELECT COALESCE(AVG(tempo_real_minutos), 0) INTO v_media
+    FROM PROCEDIMENTO_REALIZADO
+    WHERE codigo_procedimento = v_cod;
+
+    UPDATE PROCEDIMENTO
+    SET    media_tempo_procedimento = COALESCE(v_media, 0.00)
+    WHERE  codigo = NEW.codigo_procedimento;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_atualiza_media_procedimentos ON PROCEDIMENTO_REALIZADO;
+CREATE TRIGGER trg_atualiza_media_procedimentos
+AFTER INSERT ON PROCEDIMENTO_REALIZADO
+FOR EACH ROW EXECUTE FUNCTION fn_atualiza_media_procedimentos();
+
+-- Inicialização da coluna media_tempo_procedimento com valores atuais
+UPDATE PROCEDIMENTO p
+SET media_tempo_procedimento = COALESCE((
+    SELECT ROUND(AVG(pr.tempo_real_minutos), 2)
+    FROM PROCEDIMENTO_REALIZADO pr
+    WHERE pr.codigo_procedimento = p.codigo
+), 0.00);
+
+
+-- ============================================================================
+-- ETAPA 2 — PARTE E: VIEWS
+-- ============================================================================
+
+-- VIEW 1: vw_pacientes_internados
+-- Pacientes com internação ativa (data_hora_saida IS NULL na internação
+-- mais recente de cada paciente).
+CREATE OR REPLACE VIEW vw_pacientes_internados AS
+SELECT
+    i.id_internacao,
+    pac.id_pessoa          AS id_paciente,
+    pes.nome               AS paciente,
+    pes.CPF,
+    u.nome                 AS unidade,
+    i.data_hora_entrada,
+    i.motivo
+FROM INTERNACAO i
+JOIN (
+    -- Apenas a internação mais recente por paciente
+    SELECT id_paciente, MAX(data_hora_entrada) AS ultima_entrada
+    FROM   INTERNACAO
+    GROUP  BY id_paciente
+) ult ON i.id_paciente = ult.id_paciente
+      AND i.data_hora_entrada = ult.ultima_entrada
+JOIN PACIENTE pac ON i.id_paciente = pac.id_pessoa
+JOIN PESSOA   pes ON pac.id_pessoa = pes.id_pessoa
+JOIN UNIDADE  u   ON i.id_unidade  = u.id_unidade
+WHERE i.data_hora_saida IS NULL;
+
+-- VIEW 2: vw_residentes_sem_supervisor
+-- Residentes escalados em algum plantão cujo preceptor NÃO tem titulação
+-- de 'Doutor', ou cujo papel de preceptor já foi encerrado (data_fim passada).
+CREATE OR REPLACE VIEW vw_residentes_sem_supervisor AS
+SELECT
+    ep.id_escala,
+    pes_res.nome                                AS residente,
+    u.nome                                      AS unidade,
+    ep.dia_semana,
+    ep.turno,
+    pes_pre.nome                                AS preceptor,
+    COALESCE(pp.titulacao, 'Sem Titulação')     AS titulacao_preceptor,
+    CASE
+        WHEN ppp.data_fim IS NOT NULL
+         AND ppp.data_fim < CURRENT_DATE THEN 'Supervisão encerrada'
+        ELSE 'Titulação insuficiente'
+    END                                         AS motivo
+FROM ESCALA_PLANTAO ep
+JOIN PAPEL_RESIDENTE   pr   ON ep.id_papel_residente = pr.id_papel
+JOIN PAPEL_PROFISSIONAL ppr  ON pr.id_papel           = ppr.id_papel
+JOIN PESSOA            pes_res ON ppr.id_profissional = pes_res.id_pessoa
+JOIN PAPEL_PRECEPTOR   pp   ON ep.id_papel_preceptor  = pp.id_papel
+JOIN PAPEL_PROFISSIONAL ppp  ON pp.id_papel           = ppp.id_papel
+JOIN PESSOA            pes_pre ON ppp.id_profissional = pes_pre.id_pessoa
+JOIN UNIDADE           u    ON ep.id_unidade          = u.id_unidade
+WHERE
+    UPPER(COALESCE(pp.titulacao, '')) <> 'DOUTOR'
+    OR (ppp.data_fim IS NOT NULL AND ppp.data_fim < CURRENT_DATE);
+
+-- VIEW 3: vw_estatisticas_atendimentos_mensal
+-- Agregação por ano/mês e unidade: total de atendimentos, média de duração
+-- e nome do procedimento mais realizado no período.
+CREATE OR REPLACE VIEW vw_estatisticas_atendimentos_mensal AS
+-- Obs.: a tabela ATENDIMENTO original (Etapa 1) não possui id_unidade,
+-- portanto a agregação por unidade é aproximada via escala de plantão.
+-- Para demonstração direta, usamos a query abaixo sem join de unidade:
+WITH stats AS (
+    SELECT
+        EXTRACT(YEAR  FROM a.data_hora)::INT  AS ano,
+        EXTRACT(MONTH FROM a.data_hora)::INT  AS mes,
+        COUNT(a.id_atendimento)               AS total_atendimentos,
+        ROUND(AVG(a.duracao_minutos), 2)      AS media_duracao_minutos
+    FROM ATENDIMENTO a
+    GROUP BY EXTRACT(YEAR FROM a.data_hora), EXTRACT(MONTH FROM a.data_hora)
+),
+proc_rank AS (
+    SELECT
+        EXTRACT(YEAR  FROM a.data_hora)::INT  AS ano,
+        EXTRACT(MONTH FROM a.data_hora)::INT  AS mes,
+        proc.nome                             AS procedimento,
+        COUNT(*)                              AS qtd,
+        ROW_NUMBER() OVER (
+            PARTITION BY EXTRACT(YEAR FROM a.data_hora), EXTRACT(MONTH FROM a.data_hora)
+            ORDER BY COUNT(*) DESC
+        )                                     AS rnk
+    FROM ATENDIMENTO a
+    JOIN PROCEDIMENTO_REALIZADO pr ON a.id_atendimento       = pr.id_atendimento
+    JOIN PROCEDIMENTO proc         ON pr.codigo_procedimento = proc.codigo
+    GROUP BY
+        EXTRACT(YEAR  FROM a.data_hora),
+        EXTRACT(MONTH FROM a.data_hora),
+        proc.nome
+)
+SELECT
+    s.ano,
+    s.mes,
+    s.total_atendimentos,
+    s.media_duracao_minutos,
+    COALESCE(p.procedimento, 'Sem registros') AS procedimento_mais_comum
+FROM stats s
+LEFT JOIN proc_rank p ON s.ano = p.ano AND s.mes = p.mes AND p.rnk = 1
+ORDER BY s.ano DESC, s.mes DESC;
+
+
+-- ============================================================================
+-- ETAPA 2 — PARTE F: CONSULTAS AVANÇADAS (referência SQL puro, demonstradas
+--                     no app.py também via ORM SQLAlchemy)
+-- ============================================================================
+
+-- F.1 Preceptores que supervisionaram residentes que atenderam
+--     pacientes flamenguistas (is_flamengo = TRUE)
+SELECT DISTINCT
+    pes_pre.nome       AS preceptor,
+    prof_pre.CRM       AS crm_preceptor,
+    pp.titulacao
+FROM ATENDIMENTO a
+JOIN PACIENTE         pac      ON a.id_paciente       = pac.id_pessoa
+JOIN PESSOA           pes_pac  ON pac.id_pessoa        = pes_pac.id_pessoa
+JOIN PAPEL_PRECEPTOR  pp       ON a.id_papel_preceptor = pp.id_papel
+JOIN PAPEL_PROFISSIONAL ppp    ON pp.id_papel          = ppp.id_papel
+JOIN PROFISSIONAL     prof_pre ON ppp.id_profissional  = prof_pre.id_pessoa
+JOIN PESSOA           pes_pre  ON prof_pre.id_pessoa   = pes_pre.id_pessoa
+WHERE pes_pac.is_flamengo = TRUE
+ORDER BY pes_pre.nome;
+
+-- F.2 Para cada paciente, exibir o seu último atendimento
+--     (data_hora, residente, preceptor, lista de procedimentos)
+WITH ultimo_atd AS (
+    SELECT
+        id_atendimento,
+        id_paciente,
+        data_hora,
+        id_papel_residente,
+        id_papel_preceptor,
+        ROW_NUMBER() OVER (PARTITION BY id_paciente ORDER BY data_hora DESC) AS rnk
+    FROM ATENDIMENTO
+)
+SELECT
+    pes_pac.nome   AS paciente,
+    ua.data_hora   AS data_hora_ultimo_atendimento,
+    pes_res.nome   AS residente,
+    pes_pre.nome   AS preceptor,
+    COALESCE(STRING_AGG(proc.nome, ', ' ORDER BY proc.nome), 'Nenhum') AS lista_procedimentos
+FROM ultimo_atd ua
+JOIN PESSOA            pes_pac ON ua.id_paciente        = pes_pac.id_pessoa
+JOIN PAPEL_RESIDENTE   pr      ON ua.id_papel_residente = pr.id_papel
+JOIN PAPEL_PROFISSIONAL ppr    ON pr.id_papel           = ppr.id_papel
+JOIN PESSOA            pes_res ON ppr.id_profissional   = pes_res.id_pessoa
+JOIN PAPEL_PRECEPTOR   pp      ON ua.id_papel_preceptor = pp.id_papel
+JOIN PAPEL_PROFISSIONAL ppp    ON pp.id_papel           = ppp.id_papel
+JOIN PESSOA            pes_pre ON ppp.id_profissional   = pes_pre.id_pessoa
+LEFT JOIN PROCEDIMENTO_REALIZADO prl ON ua.id_atendimento       = prl.id_atendimento
+LEFT JOIN PROCEDIMENTO           proc ON prl.codigo_procedimento = proc.codigo
+WHERE ua.rnk = 1
+GROUP BY pes_pac.nome, ua.data_hora, pes_res.nome, pes_pre.nome
+ORDER BY pes_pac.nome;
+
+-- F.3 Percentual de procedimentos de alto risco realizados por cada residente
+SELECT
+    pes.nome                                                 AS residente,
+    COUNT(prl.codigo_procedimento)                           AS total_procedimentos,
+    COUNT(CASE WHEN proc.nivel_risco = 'ALTO' THEN 1 END)   AS procs_alto_risco,
+    ROUND(
+        (COUNT(CASE WHEN proc.nivel_risco = 'ALTO' THEN 1 END)::NUMERIC
+        / NULLIF(COUNT(prl.codigo_procedimento), 0)::NUMERIC)
+        * 100, 2
+    )                                                        AS pct_alto_risco
+FROM PAPEL_RESIDENTE    pr
+JOIN PAPEL_PROFISSIONAL ppr ON pr.id_papel          = ppr.id_papel
+JOIN PESSOA             pes ON ppr.id_profissional  = pes.id_pessoa
+LEFT JOIN ATENDIMENTO              a   ON pr.id_papel        = a.id_papel_residente
+LEFT JOIN PROCEDIMENTO_REALIZADO   prl ON a.id_atendimento   = prl.id_atendimento
+LEFT JOIN PROCEDIMENTO             proc ON prl.codigo_procedimento = proc.codigo
+GROUP BY pes.id_pessoa, pes.nome
+ORDER BY pct_alto_risco DESC NULLS LAST;
+
+-- ============================================================================
+-- FIM DO SCRIPT (ETAPA 1 + ETAPA 2)
 -- ============================================================================
