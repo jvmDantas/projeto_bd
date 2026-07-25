@@ -1,7 +1,7 @@
 # Relatório Técnico: Sistema de Gestão Hospitalar (Etapa 1 & 2)
 
 **Disciplina:** Banco de Dados  
-**Docente:** Dra. Yuska Maritan Brito  
+**Docente:** Profº Marcelo Iury
 **Discentes:** João Victor Martins e Luís Henrique Aranha Magalhães  
 **SGBD Utilizado:** PostgreSQL 14+ | **Linguagem & Framework:** Python 3.12, SQLAlchemy 2.0, Streamlit  
 
