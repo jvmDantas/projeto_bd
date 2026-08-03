@@ -105,6 +105,7 @@ def render_tab_concurrency():
             t2 = threading.Thread(
                 target=tx_conflict_insert, args=("Thread-B", 6, 3, "segunda", "manhã", 1, db_url))
             t1.start()
+            time.sleep(0.05)  # garante que A insira primeiro
             t2.start()
             t1.join()
             t2.join()

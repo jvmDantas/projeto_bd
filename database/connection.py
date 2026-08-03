@@ -2,20 +2,25 @@
 database/connection.py — Gerenciamento de conexões com o PostgreSQL (Psycopg2 + SQLAlchemy)
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import psycopg2
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+load_dotenv()
+
+
 def get_db_credentials():
     """Recupera as credenciais do st.session_state com suporte seguro a threads secundárias."""
-    user = "postgres"
-    password = "*Edwiges1234"
-    host = "localhost"
-    port = "5432"
-    dbname = "postgres"
+    user = os.getenv("DB_USER", "postgres")
+    password = os.getenv("DB_PASSWORD", "postgres")
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "5432")
+    dbname = os.getenv("DB_NAME", "postgres")
 
     try:
         if hasattr(st, "session_state"):
