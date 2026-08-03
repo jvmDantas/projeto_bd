@@ -6,7 +6,7 @@ import threading
 import time
 import datetime as dt
 import streamlit as st
-from database.connection import get_orm_session
+from database.connection import get_orm_session, get_orm_url
 from database.models import EscalaPlantao
 
 
@@ -35,9 +35,9 @@ def render_tab_concurrency():
     def log_msg(msg: str) -> None:
         lock_logs.append(f"[{dt.datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {msg}")
 
-    def tx_pessimistic(name: str, escala_id: int, novo_turno: str, hold_secs: float) -> None:
+    def tx_pessimistic(name: str, escala_id: int, novo_turno: str, hold_secs: float, url: str) -> None:
         """Tenta adquirir FOR UPDATE NOWAIT e alterar o turno da escala."""
-        sess = get_orm_session()
+        sess = get_orm_session(url=url)
         try:
             log_msg(f"{name}: tentando adquirir lock na escala #{escala_id}...")
             esc = (
@@ -61,9 +61,9 @@ def render_tab_concurrency():
             sess.close()
 
     def tx_conflict_insert(name: str, res_id: int, unidade_id: int,
-                           dia: str, turno: str, pre_id: int) -> None:
+                           dia: str, turno: str, pre_id: int, url: str) -> None:
         """Tenta inserir escala que conflita com outra já existente."""
-        sess = get_orm_session()
+        sess = get_orm_session(url=url)
         try:
             log_msg(f"{name}: tentando inserir escala "
                     f"(residente={res_id}, unidade={unidade_id}, {dia}/{turno})...")
@@ -87,10 +87,11 @@ def render_tab_concurrency():
     if st.button("🔥 Executar simulação concorrente", key="btn_concorrencia"):
         lock_logs.clear()
         log_msg("Iniciando simulação...")
+        db_url = get_orm_url()
 
         if modo_lock.startswith("Bloqueio Pessimista"):
-            t1 = threading.Thread(target=tx_pessimistic, args=("Thread-A", 1, "noite", 2.0))
-            t2 = threading.Thread(target=tx_pessimistic, args=("Thread-B", 1, "tarde", 0.0))
+            t1 = threading.Thread(target=tx_pessimistic, args=("Thread-A", 1, "noite", 2.0, db_url))
+            t2 = threading.Thread(target=tx_pessimistic, args=("Thread-B", 1, "tarde", 0.0, db_url))
             t1.start()
             time.sleep(0.15)  # garante que A adquira o lock primeiro
             t2.start()
@@ -100,9 +101,9 @@ def render_tab_concurrency():
             # Thread-A insere residente 6 na unidade 2 (segunda/manhã),
             # Thread-B tenta o mesmo residente numa unidade diferente — trigger rejeita.
             t1 = threading.Thread(
-                target=tx_conflict_insert, args=("Thread-A", 6, 2, "segunda", "manhã", 1))
+                target=tx_conflict_insert, args=("Thread-A", 6, 2, "segunda", "manhã", 1, db_url))
             t2 = threading.Thread(
-                target=tx_conflict_insert, args=("Thread-B", 6, 3, "segunda", "manhã", 1))
+                target=tx_conflict_insert, args=("Thread-B", 6, 3, "segunda", "manhã", 1, db_url))
             t1.start()
             t2.start()
             t1.join()

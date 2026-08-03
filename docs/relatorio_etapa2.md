@@ -9,8 +9,6 @@
 
 ## 1. Introdução e Arquitetura do Sistema
 
-Este relatório apresenta a documentação técnica da implementação completa do **Sistema de Gestão Hospitalar**, englobando o modelo relacional em PostgreSQL (Etapa 1) e as extensões avançadas de banco de dados, Mapeamento Objeto-Relacional (ORM) e controle de concorrência (Etapa 2).
-
 A arquitetura foi estruturada em camadas bem definidas:
 - **Camada de Dados (PostgreSQL):** Responsável pela persistência, integridade referencial, triggers de validação/auditoria e procedures para processamento atômico em lote.
 - **Camada ORM (SQLAlchemy 2.0):** Atua no mapeamento das entidades relacionais para objetos Python, gerenciando sessões e pools de conexões.
